@@ -11,6 +11,17 @@ from visualization import create_enhanced_plot
 
 # --- App setup ---
 st.set_page_config(page_title="Battery SoH & RUL Prediction", layout="centered")
+col1, col2 = st.columns([1, 6])
+with col1:
+    try:
+        st.image("logo2.jpg", width=150,)
+    except:
+        st.warning("⚠️ Logo not found at 'logo2.jpg'")
+with col2:
+    st.markdown(""" <div style='padding-top: 10px;'>            
+    <h2 style='margin-bottom: 5px;'>Valkontek Embedded IOT Services Private Limited</h2>       
+     </div>    
+     """, unsafe_allow_html=True)
 st.title("🔋 Battery SoH & RUL Prediction")
 st.markdown("""
 This app uses a trained Temporal CNN model combined with advanced RUL prediction methods
