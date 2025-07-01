@@ -1,168 +1,170 @@
-import random
-
+# main_app.py
 import streamlit as st
-import torch
-import torch.nn as nn
-import numpy as np
 import pandas as pd
-import joblib
+import numpy as np
+import torch
+from rul_predictor import RULPredictor
+from soh_model import load_model_and_scalers
 import matplotlib.pyplot as plt
+from visualization import create_enhanced_plot
 
-# --- App title ---
-st.set_page_config(page_title="Battery SoH Prediction", layout="centered")
+
+# --- App setup ---
+st.set_page_config(page_title="Battery SoH & RUL Prediction", layout="centered")
 st.title("🔋 Battery SoH & RUL Prediction")
 st.markdown("""
-This app uses a trained Temporal CNN model combined with Kalman filtering 
-to predict the **State of Health (SoH)**  and Remaining Useful Life (RUL) of batteries from raw sensor data.  
-Upload your unseen data or enter manually and see the prediction!
+This app uses a trained Temporal CNN model combined with advanced RUL prediction methods
+to predict the **State of Health (SoH)** and **Remaining Useful Life (RUL)** of batteries from raw sensor data.  
+Upload your data or enter manually to see comprehensive predictions!
 """)
 
-# --- Model architecture ---
-class TemporalCNN(nn.Module):
-    def __init__(self, in_features, window):
-        super(TemporalCNN, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=in_features, out_channels=32, kernel_size=2)
-        self.relu = nn.ReLU()
-        self.conv2 = nn.Conv1d(32, 16, kernel_size=2)
-        self.flatten = nn.Flatten()
-        conv_out_size = (window - 1 - 1) * 16
-        self.fc = nn.Linear(conv_out_size, 1)
-    def forward(self, x):
-        x = x.permute(0,2,1)
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.flatten(x)
-        return self.fc(x)
-
+# --- Sidebar settings ---
+st.sidebar.title("⚙️ RUL Prediction Settings")
+failure_threshold = st.sidebar.slider("Failure Threshold (%)", 50, 90, 60) / 100
+degradation_rate = st.sidebar.slider("Degradation Rate", 0.0001, 0.001, 0.0002, format="%.4f")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**RUL Methods:**")
+show_all_methods = st.sidebar.checkbox("Show all prediction methods", value=True)
 # --- Load model & scalers ---
-checkpoint = torch.load("ekf_temporal_cnn_model.pth")
-model = TemporalCNN(in_features=checkpoint['input_features'],
-                    window=checkpoint['window_size'])
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
+try:
+    model, scaler_X, scaler_y, window_size, input_dim = load_model_and_scalers(
+        "ekf_temporal_cnn_model.pth", "scaler_X.pkl", "scaler_y.pkl")
+    st.success("✅ Model loaded successfully!")
+except Exception as e:
+    st.error(f"❌ Failed to load model: {e}")
+    st.stop()
 
-scaler_X = joblib.load("scaler_X.pkl")
-scaler_y = joblib.load("scaler_y.pkl")
+# --- Initialize RUL predictor ---
+rul_predictor = RULPredictor(failure_threshold=failure_threshold)
 
-window_size = checkpoint['window_size']
-input_dim = checkpoint['input_features']
-st.success("✅ Model loaded successfully!")
-# --- Choose input method ---
-option = st.radio("Choose input method:", ("Upload CSV file", "Enter manually"))
+# --- Helper functions ---
+def predict_rul_comprehensive(predicted_soh, data, current_cycle=None):
+    if current_cycle is None:
+        current_cycle = data['cycle'].iloc[-1] if 'cycle' in data.columns else 100
+    avg_temp = data['temperature'].mean() if 'temperature' in data.columns else 25
+
+    predictions = rul_predictor.ensemble_prediction(predicted_soh, current_cycle, avg_temp)
+    pred_values = [predictions['linear'], predictions['exponential'], predictions['temperature']]
+    confidence_range = {
+        'min': min(pred_values),
+        'max': max(pred_values),
+        'std': np.std(pred_values)
+    }
+    return predictions, confidence_range, avg_temp
+
+def display_results(predictions, confidence_range, predicted_soh, avg_temp):
+    st.markdown("## 🎯 Prediction Results")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("🎯 Ensemble RUL", f"{predictions['ensemble']} cycles",
+                  delta=f"±{confidence_range['std']:.0f}" if confidence_range['std'] > 1 else None)
+        st.metric("🌡️ Avg Temperature", f"{avg_temp:.1f}°C")
+
+    with col2:
+        st.metric("📊 Current SoH", f"{predicted_soh * 100:.2f}%")
+        st.metric("📈 Confidence Range", f"{confidence_range['min']}-{confidence_range['max']} cycles")
+
+    if predicted_soh > 0.8:
+        st.success("🟢 Battery Status: Excellent Health")
+    elif predicted_soh > 0.7:
+        st.info("🟡 Battery Status: Good Health")
+    elif predicted_soh > 0.6:
+        st.warning("🟠 Battery Status: Fair Health - Monitor Closely")
+    else:
+        st.error("🔴 Battery Status: Poor Health - Replacement Recommended")
+
+    if show_all_methods:
+        st.markdown("### 📋 Detailed RUL Predictions")
+        methods_df = pd.DataFrame({
+            'Method': ['Linear Degradation', 'Exponential Decay', 'Temperature Adjusted', 'Ensemble'],
+            'RUL (cycles)': [predictions['linear'], predictions['exponential'],
+                             predictions['temperature'], predictions['ensemble']],
+            'Description': [
+                'Assumes constant degradation rate',
+                'Accelerating degradation over time',
+                'Temperature-compensated degradation',
+                'Weighted combination of methods'
+            ]
+        })
+        st.dataframe(methods_df, use_container_width=True)
+    st.markdown("## 📈 Comprehensive Analysis")
+    enhanced_fig = create_enhanced_plot(data, predicted_soh, predictions, failure_threshold)
+    st.pyplot(enhanced_fig)
+
+# --- Input ---
 required_columns = ["terminal_voltage", "terminal_current", "temperature", "cycle"]
+option = st.radio("Choose input method:", ("Upload CSV file", "Enter manually"))
+
 if option == "Upload CSV file":
     uploaded_file = st.file_uploader("Upload CSV with correct format", type="csv")
     if uploaded_file:
-        data = pd.read_csv(uploaded_file)
-        if all(col in data.columns for col in required_columns):
-            # Keep only useful columns, in correct order
-            data = data[required_columns]
-            st.write("Filtered data preview:")
-            st.dataframe(data)
-            # ... proceed to scale & predict ...
-        else:
-            st.error(f"Uploaded CSV must contain these columns: {required_columns}")
+        try:
+            data = pd.read_csv(uploaded_file)
+            if all(col in data.columns for col in required_columns):
+                data = data[required_columns]
+                st.write("📊 Data preview:")
+                st.dataframe(data, use_container_width=True)
 
-        if data.shape[0] < window_size:
-            st.error(f"Need at least {window_size} timesteps (rows)!")
-        else:
+                if data.shape[0] < window_size:
+                    st.error(f"❌ Need at least {window_size} timesteps (rows)!")
+                else:
+                    # Prepare input for model
+                    input_window = data.iloc[-window_size:].values
+                    input_scaled = scaler_X.transform(input_window)
+                    input_tensor = torch.tensor(input_scaled.reshape(1, window_size, input_dim), dtype=torch.float32)
 
-            # Use last window_size rows
-            input_window = data.iloc[-window_size:].values
-            input_scaled = scaler_X.transform(input_window)
-            input_tensor = torch.tensor(input_scaled.reshape(1, window_size, input_dim), dtype=torch.float32)
+                    # Predict SoH
+                    with torch.no_grad():
+                        pred_scaled = model(input_tensor).numpy()
+                    predicted_soh = scaler_y.inverse_transform(pred_scaled)[0][0]
 
-            # Predict
-            with torch.no_grad():
-                pred_scaled = model(input_tensor).numpy()
-            pred_real = scaler_y.inverse_transform(pred_scaled)
-            cycle = random.randint(50, 100)
-            st.success(f"✅ Predicted SoH: **{pred_real[0][0]*100:.2f}%** Healthy")
-            st.success(f"⚠️ Predicted RUL: After {cycle} cycles the battery may get Fail ")
+                    # Predict RUL using comprehensive methods
+                    predictions, confidence_range, avg_temp = predict_rul_comprehensive(predicted_soh, data)
 
-            # Plot terminal_voltage and terminal_current + predicted SoH
-            fig, ax1 = plt.subplots()
+                    display_results(predictions, confidence_range, predicted_soh, avg_temp)
 
-            color1 = 'tab:blue'
-            ax1.set_xlabel("Timestep")
-            ax1.set_ylabel("Terminal Voltage", color=color1)
-            ax1.plot(range(len(data)), data["terminal_voltage"], color=color1, label="Terminal Voltage")
-            ax1.tick_params(axis='y', labelcolor=color1)
-
-            # Create a second y-axis for terminal_current
-            ax2 = ax1.twinx()
-            color2 = 'tab:green'
-            ax2.set_ylabel("Terminal Current", color=color2)
-            ax2.plot(range(len(data)), data["terminal_current"], color=color2, label="Terminal Current")
-            ax2.tick_params(axis='y', labelcolor=color2)
-
-            # Mark predicted SoH as a red dot on the last timestep
-            ax1.scatter(len(data) - 1, pred_real[0][0], color='red', s=100, label="Predicted SoH")
-
-            # Add combined legend
-            lines_1, labels_1 = ax1.get_legend_handles_labels()
-            lines_2, labels_2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right')
-
-            plt.title("Terminal Voltage, Current & Predicted SoH")
-            st.pyplot(fig)
-
-
+            else:
+                st.error(f"CSV must have columns: {required_columns}")
+        except Exception as e:
+            st.error(f"❌ Error processing file: {e}")
 elif option == "Enter manually":
-    st.info(f"Enter data for last **{window_size} timesteps**, each with {input_dim} features (comma separated):")
+    st.info(f"📝 Enter data for last **{window_size} timesteps** (format: voltage,current,temperature,cycle):")
 
     user_input = []
     for i in range(window_size):
-        values = st.text_input(f"Timestep {i+1}")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            values = st.text_input(f"Timestep {i + 1}", placeholder="e.g., 3.7,2.1,25,100")
+        with col2:
+            if st.button("Clear", key=f"clear_{i}"):
+                st.rerun()
+
         if values:
-            nums = list(map(float, values.strip().split(',')))
-            if len(nums) != input_dim:
-                st.error(f"Expected {input_dim} features, got {len(nums)}")
-            else:
-                user_input.append(nums)
-
+            try:
+                nums = list(map(float, values.strip().split(',')))
+                if len(nums) != input_dim:
+                    st.error(f"❌ Expected {input_dim} values, got {len(nums)}")
+                else:
+                    user_input.append(nums)
+            except ValueError:
+                st.error("❌ Please enter valid numbers separated by commas")
     if len(user_input) == window_size:
-        input_scaled = scaler_X.transform(np.array(user_input))
+        input_array = np.array(user_input)
+        input_scaled = scaler_X.transform(input_array)
         input_tensor = torch.tensor(input_scaled.reshape(1, window_size, input_dim), dtype=torch.float32)
-
         with torch.no_grad():
             pred_scaled = model(input_tensor).numpy()
-        pred_real = scaler_y.inverse_transform(pred_scaled)
-        cycle=random.randint(50,100)
-        st.success(f"✅ Predicted SoH: **{pred_real[0][0]*100:.2f}%**")
-        st.success(f"✅ Predicted RUL: After {cycle} cycles the battery may get Fail ")
-
-        # Convert user_input back to DataFrame for plotting
-        user_df = pd.DataFrame(user_input, columns=required_columns)
-
-        fig, ax1 = plt.subplots()
-
-        color1 = 'tab:blue'
-        ax1.set_xlabel("Timestep")
-        ax1.set_ylabel("Terminal Voltage", color=color1)
-        ax1.plot(range(len(user_df)), user_df["terminal_voltage"], color=color1, label="Terminal Voltage")
-        ax1.tick_params(axis='y', labelcolor=color1)
-
-        # Second y-axis for terminal_current
-        ax2 = ax1.twinx()
-        color2 = 'tab:green'
-        ax2.set_ylabel("Terminal Current", color=color2)
-        ax2.plot(range(len(user_df)), user_df["terminal_current"], color=color2, label="Terminal Current")
-        ax2.tick_params(axis='y', labelcolor=color2)
-
-        # Mark predicted SoH as a red dot on last timestep
-        ax1.scatter(len(user_df) - 1, pred_real[0][0], color='red', s=100, label="Predicted SoH")
-
-        # Combine legends
-        lines_1, labels_1 = ax1.get_legend_handles_labels()
-        lines_2, labels_2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right')
-
-        plt.title("Terminal Voltage, Current & Predicted SoH")
-        st.pyplot(fig)
+        predicted_soh = scaler_y.inverse_transform(pred_scaled)[0][0]
+        df = pd.DataFrame(user_input, columns=required_columns)
+        predictions, confidence_range, avg_temp = predict_rul_comprehensive(predicted_soh, df)
+        display_results(predictions, confidence_range, predicted_soh, avg_temp)
 
 # --- Footer ---
+st.markdown("---")
 st.markdown("""
----
-Valkontek Embedded IOT Services Private Limited 
-""")
+<div style='text-align: center'>
+<p><strong>Valkontek Embedded IOT Services Private Limited</strong></p>
+<p>Advanced Battery Health Monitoring & RUL Prediction System</p>
+</div>
+""", unsafe_allow_html=True)
