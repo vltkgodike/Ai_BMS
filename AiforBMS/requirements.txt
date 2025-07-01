@@ -1,7 +1,7 @@
+pip install --upgrade pip
 pandas
 numpy
 joblib
-random
 streamlit
 torch
 matplotlib
