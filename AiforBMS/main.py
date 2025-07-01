@@ -77,7 +77,7 @@ if option == "Upload CSV file":
                 pred_scaled = model(input_tensor).numpy()
             pred_real = scaler_y.inverse_transform(pred_scaled)
             cycle = random.randint(50, 100)
-            st.success(f"✅ Predicted SoH: **{pred_real[0][0]*100:.2f}%**")
+            st.success(f"✅ Predicted SoH: **{pred_real[0][0]*100:.2f}%** Healthy")
             st.success(f"⚠️ Predicted RUL: After {cycle} cycles the battery may get Fail ")
 
             # Plot terminal_voltage and terminal_current + predicted SoH
