@@ -41,8 +41,8 @@ model = TemporalCNN(in_features=checkpoint['input_features'],
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
-scaler_X = joblib.load("C:/Users/mahes/Downloads/scaler_X.pkl")
-scaler_y = joblib.load("C:/Users/mahes/Downloads/scaler_y.pkl")
+scaler_X = joblib.load("scaler_X.pkl")
+scaler_y = joblib.load("scaler_y.pkl")
 
 window_size = checkpoint['window_size']
 input_dim = checkpoint['input_features']
