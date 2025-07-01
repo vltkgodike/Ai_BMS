@@ -47,8 +47,6 @@ scaler_y = joblib.load("scaler_y.pkl")
 window_size = checkpoint['window_size']
 input_dim = checkpoint['input_features']
 
-st.success("✅ Model and scalers loaded successfully!")
-
 # --- Choose input method ---
 option = st.radio("Choose input method:", ("Upload CSV file", "Enter manually"))
 required_columns = ["terminal_voltage", "terminal_current", "temperature", "cycle"]
