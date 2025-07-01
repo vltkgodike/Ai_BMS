@@ -165,5 +165,6 @@ elif option == "Enter manually":
 
 # --- Footer ---
 st.markdown("""
----Valkontek Embedded and IoT services 
+---
+Valkontek Embedded IOT Services Private Limited 
 """)
